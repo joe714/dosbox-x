@@ -35,6 +35,7 @@
 #include "render.h"
 #include "../gui/render_scalers.h"
 #include "vga.h"
+#include "vga_textstream.h"
 #include "pic.h"
 #include "jfont.h"
 #include "menu.h"
@@ -5952,6 +5953,11 @@ static void VGA_VerticalTimer(Bitu /*val*/) {
 	dbg_event_color_select = false;
 	dbg_event_color_plane_enable = false;
 	debugline_events.clear();
+
+	// Text streaming hook
+	if (g_textstream && g_textstream->IsEnabled()) {
+		g_textstream->OnVSync();
+	}
 
 	if (IS_PC98_ARCH) {
 		GDC_display_plane = GDC_display_plane_pending;
