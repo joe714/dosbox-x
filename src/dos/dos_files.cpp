@@ -52,6 +52,7 @@
 extern bool log_int21;
 extern bool log_fileio;
 extern bool enable_share_exe, enable_dbcs_tables;
+extern int file_access_tries;
 extern int dos_clipboard_device_access;
 extern const char *dos_clipboard_device_name;
 
@@ -1795,6 +1796,33 @@ bool DOS_FCBFindNext(uint16_t seg,uint16_t offset) {
 	return ret;
 }
 
+/* Refresh FCB file size from disk - needed for network shares where
+ * another process may have modified the file since it was opened.
+ * This ensures the FCB reflects the current file size. */
+static void DOS_FCBRefreshFileSize(DOS_FCB& fcb, uint8_t fhandle) {
+	if (!enable_share_exe || fhandle >= DOS_FILES || !Files[fhandle])
+		return;
+
+	/* Save current position */
+	uint32_t curpos = 0;
+	Files[fhandle]->Seek(&curpos, DOS_SEEK_CUR);
+
+	/* Seek to end to get current file size */
+	uint32_t newsize = 0;
+	Files[fhandle]->Seek(&newsize, DOS_SEEK_END);
+
+	/* Update FCB with new size */
+	uint32_t oldsize; uint16_t date, time;
+	fcb.GetSizeDateTime(oldsize, date, time);
+	if (newsize != oldsize) {
+		fcb.SetSizeDateTime(newsize, date, time);
+		LOG(LOG_FCB,LOG_DEBUG)("FCB file size refreshed: %u -> %u", oldsize, newsize);
+	}
+
+	/* Restore position */
+	Files[fhandle]->Seek(&curpos, DOS_SEEK_SET);
+}
+
 uint8_t DOS_FCBRead(uint16_t seg,uint16_t offset,uint16_t recno) {
 	DOS_FCB fcb(seg,offset);
 	uint8_t fhandle,cur_rec;uint16_t cur_block,rec_size;
@@ -1808,9 +1836,11 @@ uint8_t DOS_FCBRead(uint16_t seg,uint16_t offset,uint16_t recno) {
 		rec_size = 128;
 		fcb.SetSeqData(fhandle,rec_size);
 	}
+	/* Refresh file size from disk in case another process modified the file */
+	DOS_FCBRefreshFileSize(fcb, fhandle);
 	fcb.GetRecord(cur_block,cur_rec);
 	uint32_t pos=((cur_block*128u)+cur_rec)*rec_size;
-	if (!DOS_SeekFile(fhandle,&pos,DOS_SEEK_SET,true)) return FCB_READ_NODATA; 
+	if (!DOS_SeekFile(fhandle,&pos,DOS_SEEK_SET,true)) return FCB_READ_NODATA;
 	uint16_t toread=rec_size;
 	if (!DOS_ReadFile(fhandle,dos_copybuf,&toread,true)) return FCB_READ_NODATA;
 	if (toread==0) return FCB_READ_NODATA;
