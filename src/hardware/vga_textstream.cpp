@@ -647,19 +647,25 @@ void VGATextStream::GenerateTextOutput() {
         // Full redraw - use line-by-line output with explicit newlines
         // This works regardless of client terminal width
         EmitClearScreen();
-        ansi_attr_ = 0x07;
+        // Emit reset sequence to ensure terminal has default attributes
+        EmitSetAttribute(0x07);
 
         for (int row = 0; row < rows_; row++) {
             // Move to start of row (needed after clear screen)
             if (row > 0) {
+                // Reset to default before newline to prevent background bleeding
+                if (ansi_attr_ != 0x07) {
+                    EmitSetAttribute(0x07);
+                }
                 text_buffer_.push_back('\r');
                 text_buffer_.push_back('\n');
             }
 
-            // Find last non-space character to avoid trailing spaces
+            // Find last non-space character OR last character with non-default background
+            // Spaces with colored backgrounds must be output to display correctly
             int last_col = cols_ - 1;
             while (last_col >= 0 && current_[row][last_col].character == ' ' &&
-                   current_[row][last_col].attribute == ansi_attr_) {
+                   (current_[row][last_col].attribute & 0x70) == 0) {  // Check if bg is black
                 last_col--;
             }
 
@@ -669,6 +675,11 @@ void VGATextStream::GenerateTextOutput() {
                     EmitSetAttribute(curr.attribute);
                 }
                 EmitCharacter(curr.character);
+            }
+
+            // Reset after line content to prevent background bleeding to edge
+            if (ansi_attr_ != 0x07 && last_col < cols_ - 1) {
+                EmitSetAttribute(0x07);
             }
         }
         ansi_row_ = rows_ - 1;
