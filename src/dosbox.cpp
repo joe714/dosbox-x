@@ -2599,7 +2599,7 @@ void DOSBOX_SetupConfigSections(void) {
         "Amount of video memory in kilobytes to report through the VESA BIOS extensions.\n"
         "Set this value to an amount lower than vmemsize to handle DOS programs that cannot handle\n"
         "more than the small amount of video memory they were designed for. This option also affects\n"
-        "what video modes are reported through the VBE.\n"
+        "what video modes are reported through the VBE."
         );
     Pint->SetBasic(true);
 
@@ -3844,7 +3844,7 @@ void DOSBOX_SetupConfigSections(void) {
 					"'nuked' is the most accurate (but the most CPU-intensive). See oplrate as well.");
 			Pstring->SetBasic(true);
 
-			Pint = secprop->Add_int("oplrate",Property::Changeable::WhenIdle,48000);
+			Pint = secprop->Add_int("oplrate",Property::Changeable::WhenIdle,49716);
 			Pint->Set_values(rates);
 			Pint->Set_help("Sample rate of OPL music emulation. Use 49716 for highest quality (set the mixer rate accordingly).");
 			Pint->SetBasic(true);
