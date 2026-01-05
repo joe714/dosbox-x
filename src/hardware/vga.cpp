@@ -121,6 +121,7 @@
 #include <assert.h>
 
 #include "vga.h"
+#include "vga_textstream.h"
 #include "dosbox.h"
 #include "logging.h"
 #include "setup.h"
@@ -1587,6 +1588,13 @@ void VGA_Init() {
 
 	AddExitFunction(AddExitFunctionFuncPair(VGA_Destroy));
 	AddVMEventFunction(VM_EVENT_RESET,AddVMEventFunctionFuncPair(VGA_Reset));
+
+	// Text streaming initialization from environment variable
+	const char* primary = getenv("DOSBOX_TEXTSTREAM_SOCKET");
+	const char* bulk = getenv("DOSBOX_BULKSTREAM_SOCKET");
+	if (primary) {
+		VGA_TextStream_Init(primary, bulk);
+	}
 }
 
 // Store font
