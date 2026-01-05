@@ -1800,7 +1800,13 @@ bool DOS_FCBFindNext(uint16_t seg,uint16_t offset) {
  * another process may have modified the file since it was opened.
  * This ensures the FCB reflects the current file size. */
 static void DOS_FCBRefreshFileSize(DOS_FCB& fcb, uint8_t fhandle) {
-	if (!enable_share_exe || fhandle >= DOS_FILES || !Files[fhandle])
+	if (fhandle >= DOS_FILES || !Files[fhandle])
+		return;
+
+	/* Only refresh if SHARE is enabled or drive is remote */
+	uint8_t drv = Files[fhandle]->GetDrive();
+	bool driveIsRemote = (drv < DOS_DRIVES && Drives[drv] && Drives[drv]->isRemote());
+	if (!enable_share_exe && !driveIsRemote)
 		return;
 
 	/* Save current position */

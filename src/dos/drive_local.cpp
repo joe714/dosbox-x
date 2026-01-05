@@ -2802,10 +2802,10 @@ bool LocalFile::Read(uint8_t * data,uint16_t * size) {
 		} else
 			fseek(fhandle,ftell(fhandle),SEEK_SET);
         if (!newtime) UpdateLocalDateTime();
-    } else if (enable_share_exe && file_access_tries==0) {
-		/* When SHARE is enabled and using buffered I/O, invalidate the
-		 * stdio read buffer before each read. This ensures we see any
-		 * changes made by other processes on network shares. */
+    } else if (file_access_tries==0 && (enable_share_exe || (GetDrive() < DOS_DRIVES && Drives[GetDrive()] && Drives[GetDrive()]->isRemote()))) {
+		/* When SHARE is enabled or drive is remote, and using buffered I/O,
+		 * invalidate the stdio read buffer before each read. This ensures
+		 * we see any changes made by other processes on network shares. */
 		fseek(fhandle,ftell(fhandle),SEEK_SET);
 	}
 	last_action=READ;
@@ -3009,13 +3009,14 @@ bool LocalFile::Seek(uint32_t * pos,uint32_t type) {
     }
 #endif
 	bool fail;
+	bool driveIsRemote = (GetDrive() < DOS_DRIVES && Drives[GetDrive()] && Drives[GetDrive()]->isRemote());
 	if (file_access_tries>0) fail=lseek(fileno(fhandle),*reinterpret_cast<int32_t*>(pos),seektype)==-1;
 	else {
-		/* When SHARE is enabled with buffered I/O and seeking to end, ensure we
-		 * get the actual current file size by using lseek which bypasses stdio
-		 * buffering. This is important for network shares where another process
-		 * may have modified the file. */
-		if (enable_share_exe && seektype==SEEK_END) {
+		/* When SHARE is enabled or drive is remote, with buffered I/O and
+		 * seeking to end, ensure we get the actual current file size by using
+		 * lseek which bypasses stdio buffering. This is important for network
+		 * shares where another process may have modified the file. */
+		if ((enable_share_exe || driveIsRemote) && seektype==SEEK_END) {
 			fflush(fhandle);
 			off_t result = lseek(fileno(fhandle), *reinterpret_cast<int32_t*>(pos), seektype);
 			fail = (result == -1);
@@ -3037,9 +3038,9 @@ bool LocalFile::Seek(uint32_t * pos,uint32_t type) {
 	uint32_t * fake_pos=(uint32_t*)&temppos;
 	*pos=*fake_pos;
 #endif
-	/* Get current position - use lseek when share is enabled with buffered I/O
-	 * and we did a SEEK_END, since we used lseek for that operation */
-	if (file_access_tries>0 || (enable_share_exe && seektype==SEEK_END))
+	/* Get current position - use lseek when share is enabled or drive is remote
+	 * with buffered I/O and we did a SEEK_END, since we used lseek for that */
+	if (file_access_tries>0 || ((enable_share_exe || driveIsRemote) && seektype==SEEK_END))
 		*pos=(uint32_t)lseek(fileno(fhandle),0,SEEK_CUR);
 	else
 		*pos=(uint32_t)ftell(fhandle);
