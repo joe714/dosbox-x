@@ -2802,7 +2802,12 @@ bool LocalFile::Read(uint8_t * data,uint16_t * size) {
 		} else
 			fseek(fhandle,ftell(fhandle),SEEK_SET);
         if (!newtime) UpdateLocalDateTime();
-    }
+    } else if (enable_share_exe && file_access_tries==0) {
+		/* When SHARE is enabled and using buffered I/O, invalidate the
+		 * stdio read buffer before each read. This ensures we see any
+		 * changes made by other processes on network shares. */
+		fseek(fhandle,ftell(fhandle),SEEK_SET);
+	}
 	last_action=READ;
 	*size=file_access_tries>0?(uint16_t)read(fileno(fhandle),data,*size):(uint16_t)fread(data,1,*size,fhandle);
 	/* Fake harddrive motion. Inspector Gadget with soundblaster compatible */
@@ -3005,7 +3010,19 @@ bool LocalFile::Seek(uint32_t * pos,uint32_t type) {
 #endif
 	bool fail;
 	if (file_access_tries>0) fail=lseek(fileno(fhandle),*reinterpret_cast<int32_t*>(pos),seektype)==-1;
-	else fail=fseek(fhandle,*reinterpret_cast<int32_t*>(pos),seektype)!=0;
+	else {
+		/* When SHARE is enabled with buffered I/O and seeking to end, ensure we
+		 * get the actual current file size by using lseek which bypasses stdio
+		 * buffering. This is important for network shares where another process
+		 * may have modified the file. */
+		if (enable_share_exe && seektype==SEEK_END) {
+			fflush(fhandle);
+			off_t result = lseek(fileno(fhandle), *reinterpret_cast<int32_t*>(pos), seektype);
+			fail = (result == -1);
+		} else {
+			fail=fseek(fhandle,*reinterpret_cast<int32_t*>(pos),seektype)!=0;
+		}
+	}
 	if (fail) {
 		// Out of file range, pretend everything is ok
 		// and move file pointer top end of file... ?! (Black Thorne)
@@ -3020,7 +3037,12 @@ bool LocalFile::Seek(uint32_t * pos,uint32_t type) {
 	uint32_t * fake_pos=(uint32_t*)&temppos;
 	*pos=*fake_pos;
 #endif
-	*pos=file_access_tries>0?(uint32_t)lseek(fileno(fhandle),0,SEEK_CUR):(uint32_t)ftell(fhandle);
+	/* Get current position - use lseek when share is enabled with buffered I/O
+	 * and we did a SEEK_END, since we used lseek for that operation */
+	if (file_access_tries>0 || (enable_share_exe && seektype==SEEK_END))
+		*pos=(uint32_t)lseek(fileno(fhandle),0,SEEK_CUR);
+	else
+		*pos=(uint32_t)ftell(fhandle);
 	last_action=NONE;
 	return true;
 }
