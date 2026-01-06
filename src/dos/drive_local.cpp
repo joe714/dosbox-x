@@ -1602,7 +1602,14 @@ bool localDrive::FileOpen(DOS_File * * file,const char * name,uint32_t flags) {
         hand = _wfdopen(nHandle, (flags&0xf)==OPEN_WRITE?_HT("wb"):type);
 #else
         uint16_t unix_mode = (flags&0xf)==OPEN_READ||(flags&0xf)==OPEN_READ_NO_MOD?O_RDONLY:((flags&0xf)==OPEN_WRITE?O_WRONLY:O_RDWR);
-        int fd = open(host_name, unix_mode);
+        // Use O_SYNC for write modes to ensure writes are visible to other processes
+        int open_flags = unix_mode;
+#if defined(O_SYNC)
+        if (file_access_tries > 0 && unix_mode != O_RDONLY) {
+            open_flags |= O_SYNC;
+        }
+#endif
+        int fd = open(host_name, open_flags);
         if (fd < 0)
             return false;
         if (!share(fd, unix_mode & O_ACCMODE, flags)) {
@@ -2809,7 +2816,17 @@ bool LocalFile::Read(uint8_t * data,uint16_t * size) {
 		fseek(fhandle,ftell(fhandle),SEEK_SET);
 	}
 	last_action=READ;
-	*size=file_access_tries>0?(uint16_t)read(fileno(fhandle),data,*size):(uint16_t)fread(data,1,*size,fhandle);
+	if (file_access_tries>0) {
+		ssize_t ret = read(fileno(fhandle),data,*size);
+		if (ret < 0) {
+			fprintf(stderr, "DOSBox READ ERROR: errno=%d size=%u fd=%d\n", errno, *size, fileno(fhandle));
+			*size = 0;
+		} else {
+			*size = (uint16_t)ret;
+		}
+	} else {
+		*size = (uint16_t)fread(data,1,*size,fhandle);
+	}
 	/* Fake harddrive motion. Inspector Gadget with soundblaster compatible */
 	/* Same for Igor */
 	/* hardrive motion => unmask irq 2. Only do it when it's masked as unmasking is realitively heavy to emulate */
@@ -2865,6 +2882,10 @@ bool LocalFile::Write(const uint8_t * data,uint16_t * size) {
 		return !ftruncate(fileno(fhandle),pos);
 	} else {
 		*size=file_access_tries>0?(uint16_t)write(fileno(fhandle),data,*size):(uint16_t)fwrite(data,1,*size,fhandle);
+		// Force sync to disk for shared/network files when file_access_tries is enabled
+		if (file_access_tries>0) {
+			fdatasync(fileno(fhandle));
+		}
 		return true;
 	}
 }
