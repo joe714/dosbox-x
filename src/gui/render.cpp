@@ -44,6 +44,7 @@
 
 #include "render_scalers.h"
 #include "render_glsl.h"
+#include "vga_textstream.h"
 #if defined(__SSE__)
 #include <xmmintrin.h>
 #include <emmintrin.h>
@@ -501,6 +502,20 @@ void RENDER_EndUpdate( bool abort ) {
 
             CAPTURE_AddImage( render.src.width, render.src.height, render.src.bpp, pitch,
                 flags, fps, (uint8_t*)scalerSourceCacheBuffer, (uint8_t*)&render.pal.rgb );
+        }
+        // Textstream graphics capture - parallels CAPTURE_AddImage
+        if (g_textstream && g_textstream->IsConnected() && g_textstream->IsEnabled() &&
+            g_textstream->ClientWantsGraphics()) {
+            Bitu ts_pitch = render.scale.cachePitch;
+            Bitu ts_flags = 0;
+            if (render.src.dblw != render.src.dblh) {
+                if (render.src.dblw) ts_flags |= 0x2;  // CAPTURE_FLAG_DBLW
+                if (render.src.dblh) ts_flags |= 0x1;  // CAPTURE_FLAG_DBLH
+            }
+            g_textstream->CaptureGraphicsFrame(
+                render.src.width, render.src.height, render.src.bpp,
+                ts_pitch, ts_flags,
+                (uint8_t*)scalerSourceCacheBuffer, (uint8_t*)&render.pal.rgb);
         }
         if ( render.scale.outWrite ) {
             GFX_EndUpdate( abort? NULL : Scaler_ChangedLines );

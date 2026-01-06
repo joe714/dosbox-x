@@ -11,6 +11,7 @@
 #include "mem.h"
 #include "logging.h"
 
+#include <png.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -80,6 +81,20 @@ static const uint8_t ascii_scancode[128] = {
     0x29,0x1E,0x30,0x2E,0x20,0x12,0x21,0x22, 0x23,0x17,0x24,0x25,0x26,0x32,0x31,0x18,
     0x19,0x10,0x13,0x1F,0x14,0x16,0x2F,0x11, 0x2D,0x15,0x2C,0x1A,0x2B,0x1B,0x29,0x0E,
 };
+
+//-----------------------------------------------------------------------------
+// PNG Encoding Helpers
+//-----------------------------------------------------------------------------
+
+// PNG write callback for memory buffer
+static void png_write_to_vector(png_structp png_ptr, png_bytep data, png_size_t length) {
+    std::vector<uint8_t>* vec = (std::vector<uint8_t>*)png_get_io_ptr(png_ptr);
+    vec->insert(vec->end(), data, data + length);
+}
+
+static void png_flush_noop(png_structp png_ptr) {
+    (void)png_ptr;
+}
 
 //-----------------------------------------------------------------------------
 // Constructor / Destructor
@@ -243,7 +258,7 @@ void VGATextStream::SendHello() {
         static_cast<uint8_t>(StreamCap::TEXT_OUTPUT),
         static_cast<uint8_t>(StreamCap::KEYBOARD_INPUT),
         static_cast<uint8_t>(StreamCap::MOUSE_INPUT),
-        // Phase 2: add graphics/audio caps here
+        static_cast<uint8_t>(StreamCap::GRAPHICS_PNG),
     };
 
     std::vector<uint8_t> payload;
@@ -307,8 +322,10 @@ void VGATextStream::SendModeNotification() {
         SendControl(ControlMsg::MODE_TEXT, data, 4);
         mode_notified_ = true;
     } else if (IsGraphicsMode()) {
-        // Phase 2: send MODE_GRAPHICS with dimensions
-        SendControl(ControlMsg::MODE_UNSUPPORTED);
+        // Send MODE_GRAPHICS with dimensions
+        // For now, send a basic notification - actual dimensions come with each frame
+        uint8_t data[4] = {0, 0, 0, 0};  // Placeholder dimensions
+        SendControl(ControlMsg::MODE_GRAPHICS, data, 4);
         mode_notified_ = true;
     }
 }
@@ -591,6 +608,138 @@ void VGATextStream::Invalidate() {
     ansi_attr_ = 0xFF;
     ansi_row_ = -1;
     ansi_col_ = -1;
+}
+
+//-----------------------------------------------------------------------------
+// Graphics Streaming
+//-----------------------------------------------------------------------------
+
+// Frame rate limiter
+bool VGATextStream::ShouldSendFrame() {
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - last_frame_time_);
+
+    if (elapsed.count() >= (1000 / target_fps_)) {
+        last_frame_time_ = now;
+        return true;
+    }
+    return false;
+}
+
+// PNG encoding - adapted from CAPTURE_AddImage in hardware.cpp
+bool VGATextStream::EncodePNG(const uint8_t* data, int width, int height,
+                               int bpp, Bitu pitch, const uint8_t* pal,
+                               std::vector<uint8_t>& output) {
+    output.clear();
+    output.reserve(width * height / 2);  // Estimate compressed size
+
+    png_structp png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (!png_ptr) return false;
+
+    png_infop info_ptr = png_create_info_struct(png_ptr);
+    if (!info_ptr) {
+        png_destroy_write_struct(&png_ptr, NULL);
+        return false;
+    }
+
+    if (setjmp(png_jmpbuf(png_ptr))) {
+        png_destroy_write_struct(&png_ptr, &info_ptr);
+        return false;
+    }
+
+    // Write to memory buffer
+    png_set_write_fn(png_ptr, &output, png_write_to_vector, png_flush_noop);
+
+    // Fast compression for streaming
+    png_set_compression_level(png_ptr, 1);
+
+    if (bpp == 8) {
+        png_color palette[256];
+        png_set_IHDR(png_ptr, info_ptr, width, height, 8,
+                     PNG_COLOR_TYPE_PALETTE, PNG_INTERLACE_NONE,
+                     PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+        for (int i = 0; i < 256; i++) {
+            palette[i].red = pal[i*4+0];
+            palette[i].green = pal[i*4+1];
+            palette[i].blue = pal[i*4+2];
+        }
+        png_set_PLTE(png_ptr, info_ptr, palette, 256);
+    } else {
+        png_set_bgr(png_ptr);
+        png_set_IHDR(png_ptr, info_ptr, width, height, 8,
+                     PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE,
+                     PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+    }
+
+    png_write_info(png_ptr, info_ptr);
+
+    // Write rows
+    std::vector<uint8_t> rowBuf(width * 4);
+    for (int y = 0; y < height; y++) {
+        const uint8_t* srcLine = data + y * pitch;
+        png_bytep rowPointer;
+
+        if (bpp == 8) {
+            rowPointer = (png_bytep)srcLine;
+        } else if (bpp == 32) {
+            // BGRA to RGB
+            for (int x = 0; x < width; x++) {
+                rowBuf[x*3+0] = srcLine[x*4+2];  // R
+                rowBuf[x*3+1] = srcLine[x*4+1];  // G
+                rowBuf[x*3+2] = srcLine[x*4+0];  // B
+            }
+            rowPointer = rowBuf.data();
+        } else if (bpp == 24) {
+            rowPointer = (png_bytep)srcLine;
+        } else if (bpp == 15 || bpp == 16) {
+            // 16-bit to RGB
+            for (int x = 0; x < width; x++) {
+                uint16_t pixel = ((uint16_t*)srcLine)[x];
+                if (bpp == 15) {
+                    rowBuf[x*3+0] = ((pixel >> 10) & 0x1F) << 3;  // R
+                    rowBuf[x*3+1] = ((pixel >> 5) & 0x1F) << 3;   // G
+                    rowBuf[x*3+2] = (pixel & 0x1F) << 3;          // B
+                } else {
+                    rowBuf[x*3+0] = ((pixel >> 11) & 0x1F) << 3;  // R
+                    rowBuf[x*3+1] = ((pixel >> 5) & 0x3F) << 2;   // G
+                    rowBuf[x*3+2] = (pixel & 0x1F) << 3;          // B
+                }
+            }
+            rowPointer = rowBuf.data();
+        } else {
+            // Skip unsupported formats
+            continue;
+        }
+
+        png_write_row(png_ptr, rowPointer);
+    }
+
+    png_write_end(png_ptr, NULL);
+    png_destroy_write_struct(&png_ptr, &info_ptr);
+
+    return output.size() > 0;
+}
+
+// Graphics frame capture - called from render pipeline
+void VGATextStream::CaptureGraphicsFrame(Bitu width, Bitu height, Bitu bpp,
+                                          Bitu pitch, Bitu flags,
+                                          const uint8_t* data, const uint8_t* pal) {
+    if (!client_wants_graphics_ || !handshake_done_ || client_fd_ < 0) return;
+    if (!ShouldSendFrame()) return;
+
+    int w = (int)width;
+    int h = (int)height;
+
+    // Handle double width/height flags (CAPTURE_FLAG_DBLH = 0x1, CAPTURE_FLAG_DBLW = 0x2)
+    if (flags & 0x1) h *= 2;
+    if (flags & 0x2) w *= 2;
+
+    // Encode to PNG
+    if (EncodePNG(data, w, h, (int)bpp, pitch, pal, png_buffer_)) {
+        SendMessage(StreamChannel::GFX_PNG, png_buffer_.data(), png_buffer_.size());
+        LOG_MSG("TEXTSTREAM: Sent PNG frame %dx%d, %zu bytes", w, h, png_buffer_.size());
+    }
 }
 
 //-----------------------------------------------------------------------------

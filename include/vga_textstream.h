@@ -17,8 +17,10 @@
 #include <atomic>
 #include <mutex>
 #include <vector>
+#include <chrono>
 
 #include "vga.h"
+#include "dosbox.h"
 
 // Protocol version
 constexpr uint16_t STREAM_PROTOCOL_VERSION = 0x0001;
@@ -112,6 +114,13 @@ public:
     void SetEnabled(bool enabled) { enabled_ = enabled; }
     bool IsEnabled() const { return enabled_; }
 
+    // Graphics streaming
+    void CaptureGraphicsFrame(Bitu width, Bitu height, Bitu bpp,
+                              Bitu pitch, Bitu flags,
+                              const uint8_t* data, const uint8_t* pal);
+    bool ShouldSendFrame();
+    bool ClientWantsGraphics() const { return client_wants_graphics_; }
+
 private:
     // Protocol framing
     void SendMessage(StreamChannel channel, const uint8_t* data, size_t len);
@@ -142,6 +151,11 @@ private:
     void HandleKeyboardInput(const uint8_t* data, size_t len);
     void HandleMouseInput(const uint8_t* data, size_t len);
     void HandleControlInput(const uint8_t* data, size_t len);
+
+    // Graphics encoding
+    bool EncodePNG(const uint8_t* data, int width, int height,
+                   int bpp, Bitu pitch, const uint8_t* pal,
+                   std::vector<uint8_t>& output);
 
     // ANSI input parsing
     void ProcessInputByte(uint8_t byte);
@@ -199,6 +213,16 @@ private:
     bool force_redraw_ = true;
     int vsync_count_ = 0;
     bool handshake_done_ = false;
+
+    // Graphics streaming
+    std::vector<uint8_t> png_buffer_;
+    int graphics_width_ = 0;
+    int graphics_height_ = 0;
+    int graphics_bpp_ = 0;
+
+    // Frame rate limiting
+    std::chrono::steady_clock::time_point last_frame_time_;
+    int target_fps_ = 15;  // Conservative for PNG
 };
 
 // Global instance
