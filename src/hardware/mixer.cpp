@@ -58,6 +58,7 @@
 #include "control.h"
 #include "mapper.h"
 #include "hardware.h"
+#include "vga_textstream.h"
 #include "programs.h"
 #include "midi.h"
 
@@ -702,6 +703,22 @@ static void MIXER_MixData(Bitu fracs/*render up to*/) {
         }
         assert(readpos <= MIXER_BUFSIZE);
         CAPTURE_AddWave( mixer.freq, added, (int16_t*)convert );
+    }
+
+    // Stream audio via textstream if client wants it
+    if (g_textstream && g_textstream->ClientWantsAudio()) {
+        int32_t volscale1 = (int32_t)(mixer.recordvol[0] * (1 << MIXER_VOLSHIFT));
+        int32_t volscale2 = (int32_t)(mixer.recordvol[1] * (1 << MIXER_VOLSHIFT));
+        int16_t convert[1024][2];
+        Bitu added = whole - prev_rendered;
+        if (added > 1024) added = 1024;
+        Bitu readpos = mixer.work_in + prev_rendered;
+        for (Bitu i = 0; i < added; i++) {
+            convert[i][0] = MIXER_CLIP(((int64_t)mixer.work[readpos][0] * (int64_t)volscale1) >> (MIXER_VOLSHIFT + MIXER_VOLSHIFT));
+            convert[i][1] = MIXER_CLIP(((int64_t)mixer.work[readpos][1] * (int64_t)volscale2) >> (MIXER_VOLSHIFT + MIXER_VOLSHIFT));
+            readpos++;
+        }
+        g_textstream->SendAudioFrame(mixer.freq, (uint32_t)added, (int16_t*)convert);
     }
 
     mixer.samples_rendered_ms.w = whole;

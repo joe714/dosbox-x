@@ -121,6 +121,10 @@ public:
     bool ShouldSendFrame();
     bool ClientWantsGraphics() const { return client_wants_graphics_; }
 
+    // Audio streaming
+    void SendAudioFrame(uint32_t freq, uint32_t samples, const int16_t* data);
+    bool ClientWantsAudio() const { return client_wants_audio_; }
+
 private:
     // Protocol framing
     void SendMessage(StreamChannel channel, const uint8_t* data, size_t len);

@@ -259,6 +259,7 @@ void VGATextStream::SendHello() {
         static_cast<uint8_t>(StreamCap::KEYBOARD_INPUT),
         static_cast<uint8_t>(StreamCap::MOUSE_INPUT),
         static_cast<uint8_t>(StreamCap::GRAPHICS_PNG),
+        static_cast<uint8_t>(StreamCap::AUDIO_PCM),
     };
 
     std::vector<uint8_t> payload;
@@ -754,6 +755,41 @@ void VGATextStream::CaptureGraphicsFrame(Bitu width, Bitu height, Bitu bpp,
         SendMessage(StreamChannel::GFX_PNG, png_buffer_.data(), png_buffer_.size());
         LOG_MSG("TEXTSTREAM: Sent PNG frame %dx%d, %zu bytes", w, h, png_buffer_.size());
     }
+}
+
+//-----------------------------------------------------------------------------
+// Audio Streaming
+//-----------------------------------------------------------------------------
+
+void VGATextStream::SendAudioFrame(uint32_t freq, uint32_t samples, const int16_t* data) {
+    if (!client_wants_audio_ || !handshake_done_ || client_fd_ < 0) return;
+    if (samples == 0 || data == nullptr) return;
+
+    // Frame format: [sample_rate:4][num_samples:4][pcm_data...]
+    // PCM data is 16-bit stereo interleaved (4 bytes per sample frame)
+    size_t pcm_bytes = samples * 4;  // 2 channels * 2 bytes
+    size_t total_len = 8 + pcm_bytes;
+
+    std::vector<uint8_t> frame;
+    frame.reserve(total_len);
+
+    // Sample rate (big endian)
+    frame.push_back((freq >> 24) & 0xFF);
+    frame.push_back((freq >> 16) & 0xFF);
+    frame.push_back((freq >> 8) & 0xFF);
+    frame.push_back(freq & 0xFF);
+
+    // Number of samples (big endian)
+    frame.push_back((samples >> 24) & 0xFF);
+    frame.push_back((samples >> 16) & 0xFF);
+    frame.push_back((samples >> 8) & 0xFF);
+    frame.push_back(samples & 0xFF);
+
+    // PCM data (as-is, little endian int16_t stereo interleaved)
+    const uint8_t* pcm = reinterpret_cast<const uint8_t*>(data);
+    frame.insert(frame.end(), pcm, pcm + pcm_bytes);
+
+    SendMessage(StreamChannel::AUDIO_PCM, frame.data(), frame.size());
 }
 
 //-----------------------------------------------------------------------------
