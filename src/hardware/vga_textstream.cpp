@@ -323,9 +323,13 @@ void VGATextStream::SendModeNotification() {
         mode_notified_ = true;
     } else if (IsGraphicsMode()) {
         // Send MODE_GRAPHICS with dimensions
-        // For now, send a basic notification - actual dimensions come with each frame
-        uint8_t data[4] = {0, 0, 0, 0};  // Placeholder dimensions
+        uint8_t data[4];
+        data[0] = (graphics_width_ >> 8) & 0xFF;
+        data[1] = graphics_width_ & 0xFF;
+        data[2] = (graphics_height_ >> 8) & 0xFF;
+        data[3] = graphics_height_ & 0xFF;
         SendControl(ControlMsg::MODE_GRAPHICS, data, 4);
+        LOG_MSG("TEXTSTREAM: Sent MODE_GRAPHICS %dx%d", graphics_width_, graphics_height_);
         mode_notified_ = true;
     }
 }
@@ -731,11 +735,21 @@ void VGATextStream::CaptureGraphicsFrame(Bitu width, Bitu height, Bitu bpp,
     int w = (int)width;
     int h = (int)height;
 
-    // Handle double width/height flags (CAPTURE_FLAG_DBLH = 0x1, CAPTURE_FLAG_DBLW = 0x2)
-    if (flags & 0x1) h *= 2;
-    if (flags & 0x2) w *= 2;
+    // Note: We ignore DBLW/DBLH flags and send at source resolution.
+    // The frontend scales the image as needed. This avoids having to
+    // pixel-double the data here (which the original CAPTURE_AddImage does).
+    (void)flags;
 
-    // Encode to PNG
+    // Update stored graphics dimensions and notify client if changed
+    if (w != graphics_width_ || h != graphics_height_) {
+        graphics_width_ = w;
+        graphics_height_ = h;
+        graphics_bpp_ = (int)bpp;
+        mode_notified_ = false;  // Force re-notification with new dimensions
+        SendModeNotification();
+    }
+
+    // Encode to PNG at source dimensions
     if (EncodePNG(data, w, h, (int)bpp, pitch, pal, png_buffer_)) {
         SendMessage(StreamChannel::GFX_PNG, png_buffer_.data(), png_buffer_.size());
         LOG_MSG("TEXTSTREAM: Sent PNG frame %dx%d, %zu bytes", w, h, png_buffer_.size());
